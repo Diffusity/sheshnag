@@ -53,8 +53,9 @@ _MANAGED_FIELDS = (
 _ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 # Runtime names may never appear in a platform slug: the id must survive an
-# Ollama → llama.cpp swap unchanged.
-_RUNTIME_SEGMENTS = frozenset({"ollama", "vllm", "llamacpp", "llama-cpp", "tgi"})
+# Ollama → llama.cpp swap unchanged. (Ids are compared segment-wise, so only
+# hyphen-free names can ever match.)
+_RUNTIME_SEGMENTS = frozenset({"ollama", "vllm", "llamacpp", "tgi"})
 
 _ARTIFACT_ROLES = frozenset({"weights", "mmproj", "shard"})
 
@@ -111,13 +112,30 @@ def _entry_profiles(entry: dict) -> list:
         else:
             return []
     out = []
+    seen_runtimes = set()
     for p in profiles:
+        # Manifest is hand-edited YAML: a malformed profile must degrade to
+        # a logged skip, never an exception or an IntegrityError at commit
+        # (the seed's "boot never fails" guarantee).
+        if not isinstance(p, dict):
+            logger.warning(
+                "Catalogue entry %r: profile is not a mapping — skipped: %r",
+                entry.get("id"), p,
+            )
+            continue
         if not p.get("runtime") or not p.get("runtime_model_id"):
             logger.warning(
                 "Catalogue entry %r: profile missing runtime/runtime_model_id "
                 "— skipped: %r", entry.get("id"), p,
             )
             continue
+        if p["runtime"] in seen_runtimes:
+            logger.warning(
+                "Catalogue entry %r: duplicate profile for runtime %r — "
+                "first wins, duplicate skipped", entry.get("id"), p["runtime"],
+            )
+            continue
+        seen_runtimes.add(p["runtime"])
         out.append({
             "runtime": p["runtime"],
             "runtime_model_id": p["runtime_model_id"],
@@ -195,15 +213,25 @@ def _sync_files(db, mid: str, entry: dict) -> bool:
 def _apply_rename(db, mid: str, entry: dict) -> None:
     """Rename an existing row to `mid` when the entry declares `renamed_from`.
 
-    In-place PK update: child tables cascade nothing (they key on the new id
-    only after this), and `batches.model` is a plain string — historical rows
-    keep the retired slug, which dashboards may display as-is.
+    Implemented as insert-under-new-id, repoint children, delete old row
+    (the child FKs have no ON UPDATE CASCADE, so the PK cannot change in
+    place). `batches.model` is a plain string — historical rows keep the
+    retired slug, which dashboards may display as-is.
     """
     old_id = entry.get("renamed_from")
     if not old_id:
         return
     if db.query(ModelCatalog).filter(ModelCatalog.id == mid).first() is not None:
-        return  # already renamed (or a fresh row was seeded under the new id)
+        # Normally "already renamed" — but if the OLD id also still exists
+        # (e.g. capture_catalog --discover re-staged it), a duplicate active
+        # entry is stranded; that needs an operator, so say so.
+        if db.query(ModelCatalog).filter(ModelCatalog.id == old_id).first() is not None:
+            logger.warning(
+                "Catalogue rename %s -> %s skipped: BOTH ids exist — "
+                "duplicate entry stranded under the old id; delete or "
+                "disable %r manually", old_id, mid, old_id,
+            )
+        return
     old = db.query(ModelCatalog).filter(ModelCatalog.id == old_id).first()
     if old is None:
         return  # nothing to rename — new install, plain insert follows

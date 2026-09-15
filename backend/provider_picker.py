@@ -77,6 +77,24 @@ def _target_ids(entry) -> list:
     return [rmid for _runtime, rmid in entry.serving_targets()]
 
 
+def resolve_runtime_model_id(entry, worker_models) -> str:
+    """The runtime_model_id to hand THIS worker for `entry` at dispatch.
+
+    A multi-profile entry answers to several ids (`qwen3:4b` to Ollama, an
+    HF repo path to vLLM); the picker matched the worker on ANY of them, so
+    dispatch must send the one this worker actually hosts — not the legacy
+    column. Falls back to the legacy column when nothing matches (entry
+    with no profiles yet, or the pre-heartbeat worker whose model list is
+    empty: the daemon resolves its own runtime's id there).
+    """
+    if entry is None:
+        return None
+    for _runtime, rmid in entry.serving_targets():
+        if _hosts(worker_models, [rmid], entry.digest):
+            return rmid
+    return entry.runtime_model_id
+
+
 def can_serve(entry, advertised_models, vram_total_gb) -> bool:
     """Could a worker with these models and this VRAM run `entry`?
 

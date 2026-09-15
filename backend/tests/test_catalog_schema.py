@@ -122,6 +122,29 @@ def test_explicit_profiles_sync_and_prune(db, monkeypatch, tmp_path):
     assert [(p.runtime, p.params) for p in profiles] == [("llamacpp", None)]
 
 
+def test_malformed_profiles_are_skipped_not_fatal(db, monkeypatch, tmp_path):
+    """A hand-edited manifest with a junk profile entry must degrade to a
+    logged skip — not an AttributeError, not an IntegrityError at commit."""
+    _seed(monkeypatch, tmp_path, [{
+        "id": "zztest-junk-q4km",
+        "display_name": "junk",
+        "runtime": "ollama",
+        "runtime_model_id": "junk:1b",
+        "quantization": "Q4_K_M",
+        "profiles": [
+            "not-a-mapping",                                        # non-dict
+            {"runtime": "ollama", "runtime_model_id": "junk:1b"},   # valid
+            {"runtime": "ollama", "runtime_model_id": "junk:2b"},   # dup runtime
+            {"runtime": "vllm"},                                    # missing rmid
+        ],
+    }])
+    entry = db.query(ModelCatalog).filter(ModelCatalog.id == "zztest-junk-q4km").one()
+    # Only the first valid profile per runtime survives.
+    assert [(p.runtime, p.runtime_model_id) for p in entry.profiles] == [
+        ("ollama", "junk:1b")
+    ]
+
+
 # ─── Artifact files ──────────────────────────────────────────
 
 def test_multi_file_artifact_sync(db, monkeypatch, tmp_path):
@@ -238,3 +261,12 @@ def test_hosts_matches_any_serving_target(db, monkeypatch, tmp_path):
     assert not can_serve(entry, [("other:7b", None)], 8.0)
     # VRAM gate still applies.
     assert not can_serve(entry, [("dual:4b", None)], 2.0)
+
+    # Dispatch hands each worker the id IT hosts — not the legacy column.
+    from provider_picker import resolve_runtime_model_id
+    assert resolve_runtime_model_id(entry, [("dual:4b", None)]) == "dual:4b"
+    assert resolve_runtime_model_id(
+        entry, [("repo/dual-Q4_K_M.gguf", None)]
+    ) == "repo/dual-Q4_K_M.gguf"
+    # No match (pre-heartbeat worker, empty model list) -> legacy fallback.
+    assert resolve_runtime_model_id(entry, []) == "dual:4b"
