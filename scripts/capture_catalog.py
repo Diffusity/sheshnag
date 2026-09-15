@@ -138,11 +138,19 @@ def resolve_vram_gb(args, model: str, size_gb):
     return estimate_vram_gb(size_gb), "estimated"
 
 
-def _slug(rmid: str) -> str:
-    """Draft a catalogue id from a runtime model id, e.g. mistral:7b ->
-    mistral-7b-ollama. Human should tidy it before enabling."""
+def _slug(rmid: str, quantization: str = None) -> str:
+    """Draft a catalogue id from a runtime model id, e.g. mistral:7b +
+    Q4_K_M -> mistral-7b-q4km. Human should tidy it before enabling.
+
+    Naming rules (#116, enforced by catalog_seed): lowercase [a-z0-9-],
+    quant slug suffix, and never a runtime name — the id must survive a
+    runtime swap unchanged."""
+    import re
     base = rmid.replace(":", "-").replace("/", "-").replace(".", "-").lower()
-    return f"{base}-ollama"
+    if quantization:
+        quant = re.sub(r"[^a-z0-9]", "", str(quantization).lower())
+        return f"{base}-{quant}"
+    return base
 
 
 def _enrich(entries, tags, args) -> int:
@@ -207,7 +215,7 @@ def _discover(entries, tags, args) -> int:
         ctx = fetch_context_length(args.ollama, rmid)
         vram, how = resolve_vram_gb(args, rmid, t["size_gb"])
         entries.append({
-            "id": _slug(rmid),
+            "id": _slug(rmid, t["quantization"]),
             "display_name": f"TODO: {rmid}",
             "runtime": "ollama",
             "runtime_model_id": rmid,
@@ -226,7 +234,7 @@ def _discover(entries, tags, args) -> int:
         })
         added += 1
         vnote = f"vram_gb={vram} ({how})" if vram is not None else "vram_gb=null"
-        print(f"  discovered {rmid} -> staged '{_slug(rmid)}' (enabled:false, {vnote} — verify)")
+        print(f"  discovered {rmid} -> staged '{_slug(rmid, t['quantization'])}' (enabled:false, {vnote} — verify)")
     return added
 
 

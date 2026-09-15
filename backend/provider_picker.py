@@ -49,24 +49,32 @@ def _norm_digest(d):
     return d.split(":", 1)[1] if ":" in d else d
 
 
-def _hosts(worker_models, runtime_model_id: str, catalog_digest) -> bool:
+def _hosts(worker_models, runtime_model_ids, catalog_digest) -> bool:
     """Does the worker host this catalogue artifact?
 
-    Matches on runtime_model_id, then enforces digest equality **only when
-    both sides carry a digest** (the reproducibility guard: same tag +
-    different digest ⇒ not a match). If either digest is missing (older
-    daemon, un-pinned catalogue entry, non-Ollama runtime), fall back to
-    name equality so mixed-version fleets keep scheduling.
+    `runtime_model_ids` is every id the artifact answers to — one per
+    serving profile (the same weights are `qwen3:4b` to Ollama and an HF
+    repo path to vLLM). Matches on any of them, then enforces digest
+    equality **only when both sides carry a digest** (the reproducibility
+    guard: same tag + different digest ⇒ not a match). If either digest is
+    missing (older daemon, un-pinned catalogue entry, non-Ollama runtime),
+    fall back to name equality so mixed-version fleets keep scheduling.
     """
     cat = _norm_digest(catalog_digest)
+    ids = set(runtime_model_ids)
     for name, digest in worker_models:
-        if name != runtime_model_id:
+        if name not in ids:
             continue
         wd = _norm_digest(digest)
         if cat and wd and cat != wd:
             continue  # same tag, different artifact — reject
         return True
     return False
+
+
+def _target_ids(entry) -> list:
+    """runtime_model_ids across the entry's serving profiles (or legacy pair)."""
+    return [rmid for _runtime, rmid in entry.serving_targets()]
 
 
 def can_serve(entry, advertised_models, vram_total_gb) -> bool:
@@ -85,7 +93,7 @@ def can_serve(entry, advertised_models, vram_total_gb) -> bool:
     required = entry.vram_gb or 0
     if vram_total_gb is not None and vram_total_gb < required:
         return False
-    return _hosts(advertised_models, entry.runtime_model_id, entry.digest)
+    return _hosts(advertised_models, _target_ids(entry), entry.digest)
 
 
 class ProviderPicker:
@@ -117,7 +125,7 @@ class ProviderPicker:
             if not can_serve(entry, advertised, vram):
                 continue  # can't fit the model, or doesn't host the artifact
 
-            if _hosts(loaded, entry.runtime_model_id, entry.digest):
+            if _hosts(loaded, _target_ids(entry), entry.digest):
                 loaded_matches.append(batch)
             else:
                 other_matches.append(batch)

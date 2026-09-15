@@ -1,6 +1,6 @@
 # Model catalogue
 
-*Last updated 2026-08-02. Moved into its current location on 2026-08-26 and **not** re-verified against code since.*
+*Last updated 2026-09-15 (registry schema: serving profiles, artifact files, capabilities/lineage, naming rules — #116).*
 
 The set of models a user may select for a batch. `body.model` in a submitted
 JSONL is a **catalogue id** — a stable platform slug — not a raw runtime tag.
@@ -31,21 +31,52 @@ JSONL is a **catalogue id** — a stable platform slug — not a raw runtime tag
 | --- | --- |
 | `id` | stable platform slug — what the user puts in `body.model` |
 | `display_name` | human label for the picker |
-| `runtime` | `ollama` \| `vllm` |
-| `runtime_model_id` | exact runtime string (internal), e.g. `mistral:7b` |
+| `runtime` | **deprecated** — moving to `serving_profiles`; kept dual-written for existing readers |
+| `runtime_model_id` | **deprecated** — moving to `serving_profiles`; kept dual-written |
 | `digest` | reproducibility pin + availability join key (may be null → name-matched) |
 | `quantization`, `parameter_size`, `context_length` | descriptive (curated once) |
 | `vram_gb` | scheduling requirement (VRAM to run) — **not derivable from Ollama** |
 | `size_gb` | on-disk size (feeds download size cap) |
 | `task_type` | `chat` \| `text-generation` \| `embedding` \| `vision` |
+| `capabilities` | JSON — what the MODEL can do (`json_mode`, `vision`, `embeddings`, `logprobs`); runtime mechanism differences live in the executor's `capabilities()`, effective = model AND runtime |
+| `lineage` | upstream base weights (HF repo id) — groups quants of the same model; organizational only, never identity; NULL = ungrouped |
 | `source_type` / `source_ref` / `source_revision` / `homepage_url` | provenance (where it came from / model card) — never a matching key |
 | `org_id` | NULL = public; set = org-private (reserved for tier 2) |
-| `status` | `active` \| `requested` \| `deprecated` |
+| `status` | `active` \| `requested` \| `deprecated` \| `unverified` |
 | `enabled` | false hides it from scheduling and `GET /v1/models` (staging) |
 
 Descriptive metadata lives here, curated once — **not** replicated on the
 per-worker `runtime_models` rows, which stay lean (name, `runtime_model_id`,
 `digest`, `loaded`, `status`) for scheduling.
+
+## Child tables
+
+**`serving_profiles`** — how one artifact is served by one runtime:
+`(catalog_id, runtime, runtime_model_id, params)`, unique per
+`(catalog_id, runtime)`. `params` are platform-owned server-launch knobs
+(llama.cpp `n_ctx`/`parallel`, vLLM `max_model_len`) — per-request sampling
+params still travel in each batch row's `body`. Entries without an explicit
+`profiles:` list in the manifest get one profile derived from the legacy
+`runtime`/`runtime_model_id` pair. Adding a runtime = a new profile row,
+never a new catalogue entry.
+
+**`catalog_artifact_files`** — the files an artifact comprises, each with its
+own sha256: a vision GGUF is weights + mmproj, a safetensors model is many
+shards. Provisioning must verify every row before the artifact counts as
+present. Single-file entries may skip this table (`digest` suffices).
+
+## Naming rules (enforced by the seed)
+
+`id` is lowercase `[a-z0-9]` segments joined by `-`; it must **end with the
+quant slug** when the entry declares a `quantization` (`Q4_K_M` → `-q4km`),
+and must **never contain a runtime name** (`ollama`, `vllm`, `llamacpp`) —
+the slug has to survive a runtime swap unchanged. Violations are logged and
+the entry is skipped, not a boot failure.
+
+Renames are one-shot: give the entry its new `id` plus
+`renamed_from: <old-id>`; the seed updates the row (and its child rows) in
+place. There is no aliases table — `batches.model` is a plain string, so
+historical rows keep the retired slug.
 
 ## Scheduling (`provider_picker.py`)
 

@@ -54,6 +54,8 @@ def list_models(
             "parameter_size": e.parameter_size,
             "context_length": e.context_length,
             "task_type": e.task_type,
+            "capabilities": e.capabilities,
+            "lineage": e.lineage,
             "vram_gb": e.vram_gb,
             "size_gb": e.size_gb,
             "source_type": e.source_type,
