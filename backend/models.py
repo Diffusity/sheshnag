@@ -1,7 +1,7 @@
 from database import Base
 from sqlalchemy import (
     BigInteger, Column, String, Integer, Boolean, Float, Text, ForeignKey,
-    UniqueConstraint,
+    UniqueConstraint, JSON,
 )
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -55,6 +55,14 @@ def generate_gpu_id():
 
 def generate_catalog_id():
     return f"mdl-{uuid.uuid4().hex[:24]}"
+
+
+def generate_profile_id():
+    return f"sprof-{uuid.uuid4().hex[:24]}"
+
+
+def generate_artifact_file_id():
+    return f"caf-{uuid.uuid4().hex[:24]}"
 
 
 def generate_usage_id():
@@ -359,6 +367,10 @@ class ModelCatalog(Base):
 
     id               = Column(String, primary_key=True, default=generate_catalog_id)
     display_name     = Column(String, nullable=False)
+    # DEPRECATED pair: runtime coupling now lives on `serving_profiles`
+    # (one entry, several runtimes). Kept dual-written by the seed so
+    # existing readers (dispatch, validator) keep working until they are
+    # migrated to `serving_targets()`; do not add new readers.
     runtime          = Column(String, nullable=False)   # ollama | vllm
     runtime_model_id = Column(String, nullable=False)   # exact runtime string, internal
     digest           = Column(String, nullable=True)    # reproducibility pin / join key (identity)
@@ -370,6 +382,15 @@ class ModelCatalog(Base):
     task_type        = Column(String, nullable=True)    # chat | text-generation | embedding | vision
     parameter_size   = Column(String, nullable=True)    # human-readable, e.g. '7B'
     context_length   = Column(Integer, nullable=True)
+    # What the MODEL can do (properties of the weights: vision, embeddings,
+    # json_mode, logprobs). Runtime mechanism differences (grammar vs guided
+    # decoding) are the executor's capabilities(), not stored here; effective
+    # capability = model AND runtime.
+    capabilities     = Column(JSON, nullable=True)
+    # Upstream base weights (HF repo id) — groups quants/formats of the same
+    # model for the dashboard and duplicate checks. Organizational only,
+    # never an identity or matching key; NULL = ungrouped (unknown upstream).
+    lineage          = Column(String, nullable=True)
     # Provenance (where the artifact came from / how to fetch it) — distinct
     # from identity (`digest`). source_ref + source_revision is the pull
     # reference (HF repo+commit, or Ollama library path); homepage_url is the
@@ -379,9 +400,85 @@ class ModelCatalog(Base):
     source_revision  = Column(String, nullable=True)    # HF commit/tag; NULL for ollama
     homepage_url     = Column(String, nullable=True)    # model-card link for the dashboard
     org_id           = Column(String, ForeignKey("organizations.id"), nullable=True)  # NULL = public
-    status           = Column(String, default="active")  # active | requested | deprecated
+    status           = Column(String, default="active")  # active | requested | deprecated | unverified
     enabled          = Column(Boolean, default=True)
     created_at       = Column(Integer, default=unix_now)
+
+    profiles = relationship(
+        "ServingProfile", back_populates="entry",
+        cascade="all, delete-orphan",
+    )
+    artifact_files = relationship(
+        "CatalogArtifactFile", back_populates="entry",
+        cascade="all, delete-orphan",
+    )
+
+    def serving_targets(self) -> list:
+        """(runtime, runtime_model_id) pairs this entry can be served as.
+
+        Serving profiles are the source of truth; entries whose profiles have
+        not been seeded yet fall back to the legacy columns, so mixed states
+        keep scheduling.
+        """
+        if self.profiles:
+            return [(p.runtime, p.runtime_model_id) for p in self.profiles]
+        return [(self.runtime, self.runtime_model_id)]
+
+
+class ServingProfile(Base):
+    """How one catalogue artifact is served by one runtime.
+
+    The registry entry (`ModelCatalog`) pins WHAT the artifact is; a profile
+    binds it to a runtime plus that runtime's launch knobs (`params`, e.g.
+    llama.cpp `n_ctx`/`parallel`, vLLM `max_model_len`/`gpu_mem_util`).
+    Launch knobs are per-deployment and platform-owned — per-request
+    sampling params still travel in each batch row's `body`, untouched.
+    One entry may carry several profiles; adding a runtime is a new row
+    here, never a registry change.
+    """
+    __tablename__ = "serving_profiles"
+    __table_args__ = (
+        UniqueConstraint("catalog_id", "runtime"),
+    )
+
+    id         = Column(String, primary_key=True, default=generate_profile_id)
+    catalog_id = Column(
+        String, ForeignKey("model_catalog.id", ondelete="CASCADE"), nullable=False,
+    )
+    runtime          = Column(String, nullable=False)  # ollama | vllm | llamacpp
+    runtime_model_id = Column(String, nullable=False)  # exact id this runtime expects
+    params           = Column(JSON, nullable=True)     # server-launch knobs
+    created_at = Column(Integer, default=unix_now)
+    updated_at = Column(Integer, default=unix_now)
+
+    entry = relationship("ModelCatalog", back_populates="profiles")
+
+
+class CatalogArtifactFile(Base):
+    """One file of a catalogue artifact, with its own hash.
+
+    `ModelCatalog.digest` pins only the weights file; a vision GGUF is two
+    files (weights + mmproj projector) and a safetensors model is many
+    shards. Provisioning downloads and verifies every row here before an
+    assignment counts as present — "artifact present" means complete, not
+    just weights. Single-file entries may skip this table (digest suffices).
+    """
+    __tablename__ = "catalog_artifact_files"
+    __table_args__ = (
+        UniqueConstraint("catalog_id", "file"),
+    )
+
+    id         = Column(String, primary_key=True, default=generate_artifact_file_id)
+    catalog_id = Column(
+        String, ForeignKey("model_catalog.id", ondelete="CASCADE"), nullable=False,
+    )
+    file       = Column(String, nullable=False)      # filename within the source repo
+    role       = Column(String, nullable=False, default="weights")  # weights | mmproj | shard
+    sha256     = Column(String, nullable=True)
+    size_bytes = Column(BigInteger, nullable=True)
+    created_at = Column(Integer, default=unix_now)
+
+    entry = relationship("ModelCatalog", back_populates="artifact_files")
 
 
 # ─── Files & Batches ────────────────────────────────────────

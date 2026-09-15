@@ -12,7 +12,7 @@ from schemas import (
 from pydantic import BaseModel
 from typing import Optional
 from auth import get_worker_context
-from provider_picker import picker, get_catalog_entry
+from provider_picker import picker, get_catalog_entry, resolve_runtime_model_id
 from sweeper import MAX_BATCH_ATTEMPTS, requeue_or_fail_batch
 from services.usage_ingest import ingest_usage_records
 import shutil, os, logging
@@ -276,8 +276,13 @@ def poll_job(
     db.refresh(batch)
 
     # The daemon runs the runtime's own model id, not our catalogue slug.
+    # Multi-profile entries answer to several ids — send the one THIS
+    # worker hosts (the picker may have matched on any of them).
     entry = get_catalog_entry(db, batch.model)
-    runtime_model_id = entry.runtime_model_id if entry else batch.model
+    runtime_model_id = (
+        resolve_runtime_model_id(entry, worker.advertised_models())
+        if entry else batch.model
+    )
 
     return {
         "job": {

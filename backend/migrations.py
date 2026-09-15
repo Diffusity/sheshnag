@@ -10,7 +10,7 @@ SQLite (the two dialects in the deployment matrix).
 import logging
 
 from sqlalchemy import inspect, text
-from sqlalchemy import Integer, String
+from sqlalchemy import Integer, String, JSON
 
 from database import get_engine
 from models import Base, Batch, BatchAssignment, UsageRecord  # noqa: F401 — ensure models are registered
@@ -64,6 +64,13 @@ MIGRATIONS = [
                "batch_assignments", "org_id", String()),
     _Migration("batch_assignments.worker_hostname",
                "batch_assignments", "worker_hostname", String()),
+    # Registry schema (#116): model-level capabilities and upstream lineage.
+    # The serving_profiles / catalog_artifact_files tables need no entry —
+    # new tables come from create_all().
+    _Migration("model_catalog.capabilities",
+               "model_catalog", "capabilities", JSON()),
+    _Migration("model_catalog.lineage",
+               "model_catalog", "lineage", String()),
 ]
 
 

@@ -1,4 +1,5 @@
-- id: gemma3-12b-ollama
+- id: gemma3-12b-q4km
+  renamed_from: gemma3-12b-ollama
   display_name: gemma3:12b
   runtime: ollama
   runtime_model_id: gemma3:12b
@@ -9,12 +10,17 @@
   vram_gb: 9.6
   size_gb: 7.59
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: true
+    embeddings: false
   source_type: ollama-library
   source_ref: gemma3
   source_revision: null
   homepage_url: https://ollama.com/library/gemma3
   enabled: true
-- id: gemma3-27b-ollama
+- id: gemma3-27b-q4km
+  renamed_from: gemma3-27b-ollama
   display_name: gemma3:27b
   runtime: ollama
   runtime_model_id: gemma3:27b
@@ -25,12 +31,17 @@
   vram_gb: 19.9
   size_gb: 16.2
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: true
+    embeddings: false
   source_type: ollama-library
   source_ref: gemma3
   source_revision: null
   homepage_url: https://ollama.com/library/gemma3
   enabled: true
-- id: gemma4-12b-ollama
+- id: gemma4-12b-q4km
+  renamed_from: gemma4-12b-ollama
   display_name: gemma4:12b
   runtime: ollama
   runtime_model_id: gemma4:12b
@@ -41,12 +52,17 @@
   vram_gb: 8.9
   size_gb: 7.04
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: true
+    embeddings: false
   source_type: ollama-library
   source_ref: gemma4
   source_revision: null
   homepage_url: https://ollama.com/library/gemma4
   enabled: true
-- id: gemma4-26b-ollama
+- id: gemma4-26b-q4km
+  renamed_from: gemma4-26b-ollama
   display_name: gemma4:26b
   runtime: ollama
   runtime_model_id: gemma4:26b
@@ -57,12 +73,17 @@
   vram_gb: 20.6
   size_gb: 16.75
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: true
+    embeddings: false
   source_type: ollama-library
   source_ref: gemma4
   source_revision: null
   homepage_url: https://ollama.com/library/gemma4
   enabled: true
-- id: gemma4-latest-ollama
+- id: gemma4-latest-q4km
+  renamed_from: gemma4-latest-ollama
   display_name: gemma4:latest
   runtime: ollama
   runtime_model_id: gemma4:latest
@@ -73,12 +94,17 @@
   vram_gb: 11.2
   size_gb: 8.95
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: true
+    embeddings: false
   source_type: ollama-library
   source_ref: gemma4
   source_revision: null
   homepage_url: https://ollama.com/library/gemma4
   enabled: true
-- id: gpt-oss-20b-ollama
+- id: gpt-oss-20b-mxfp4
+  renamed_from: gpt-oss-20b-ollama
   display_name: gpt-oss:20b
   runtime: ollama
   runtime_model_id: gpt-oss:20b
@@ -89,12 +115,17 @@
   vram_gb: 15.9
   size_gb: 12.85
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: false
+    embeddings: false
   source_type: ollama-library
   source_ref: gpt-oss
   source_revision: null
   homepage_url: https://ollama.com/library/gpt-oss
   enabled: true
-- id: nuextract-3-8b-ollama
+- id: nuextract-3-8b-q40
+  renamed_from: nuextract-3-8b-ollama
   display_name: nuextract:3.8b
   runtime: ollama
   runtime_model_id: nuextract:3.8b
@@ -105,12 +136,17 @@
   vram_gb: 2.9
   size_gb: 2.03
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: false
+    embeddings: false
   source_type: ollama-library
   source_ref: nuextract
   source_revision: null
   homepage_url: https://ollama.com/library/nuextract
   enabled: true
-- id: qwen2-5-coder-32b-ollama
+- id: qwen2-5-coder-32b-q4km
+  renamed_from: qwen2-5-coder-32b-ollama
   display_name: qwen2.5-coder:32b
   runtime: ollama
   runtime_model_id: qwen2.5-coder:32b
@@ -121,12 +157,17 @@
   vram_gb: 22.7
   size_gb: 18.49
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: false
+    embeddings: false
   source_type: ollama-library
   source_ref: qwen2.5-coder
   source_revision: null
   homepage_url: https://ollama.com/library/qwen2.5-coder
   enabled: true
-- id: qwen3-coder-30b-ollama
+- id: qwen3-coder-30b-q4km
+  renamed_from: qwen3-coder-30b-ollama
   display_name: qwen3-coder:30b
   runtime: ollama
   runtime_model_id: qwen3-coder:30b
@@ -137,12 +178,17 @@
   vram_gb: 21.2
   size_gb: 17.28
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: false
+    embeddings: false
   source_type: ollama-library
   source_ref: qwen3-coder
   source_revision: null
   homepage_url: https://ollama.com/library/qwen3-coder
   enabled: true
-- id: qwen3-32b-ollama
+- id: qwen3-32b-q4km
+  renamed_from: qwen3-32b-ollama
   display_name: qwen3:32b
   runtime: ollama
   runtime_model_id: qwen3:32b
@@ -153,13 +199,18 @@
   vram_gb: 23.1
   size_gb: 18.81
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: false
+    embeddings: false
   source_type: ollama-library
   source_ref: qwen3
   source_revision: null
   homepage_url: https://ollama.com/library/qwen3
   enabled: true
-- id: glm-4-7-flash-latest-ollama
-  display_name: 'glm-4.7-flash:latest'
+- id: glm-4-7-flash-latest-q4km
+  renamed_from: glm-4-7-flash-latest-ollama
+  display_name: glm-4.7-flash:latest
   runtime: ollama
   runtime_model_id: glm-4.7-flash:latest
   digest: d1a8a26252f18b34301218d22abd2620a65b85ba4b78987842eb157e01321222
@@ -169,13 +220,18 @@
   vram_gb: 29.12
   size_gb: 17.71
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: false
+    embeddings: false
   source_type: ollama-library
   source_ref: glm-4.7-flash
   source_revision: null
   homepage_url: https://ollama.com/library/glm-4.7-flash
   enabled: true
-- id: qwen3-6-27b-ollama
-  display_name: 'qwen3.6:27b'
+- id: qwen3-6-27b-q4km
+  renamed_from: qwen3-6-27b-ollama
+  display_name: qwen3.6:27b
   runtime: ollama
   runtime_model_id: qwen3.6:27b
   digest: a50eda8ed977ab48a12431878896b27ffd5cef552c17af3317d9623b939a7f1e
@@ -185,12 +241,17 @@
   vram_gb: 25.23
   size_gb: 16.22
   task_type: chat
+  capabilities:
+    json_mode: true
+    vision: false
+    embeddings: false
   source_type: ollama-library
   source_ref: qwen3.6
   source_revision: null
   homepage_url: https://ollama.com/library/qwen3.6
   enabled: true
-- id: nomic-embed-text-ollama
+- id: nomic-embed-text-f16
+  renamed_from: nomic-embed-text-ollama
   display_name: nomic-embed-text
   runtime: ollama
   runtime_model_id: nomic-embed-text:latest
@@ -201,6 +262,10 @@
   vram_gb: 1.0
   size_gb: 0.27
   task_type: embedding
+  capabilities:
+    embeddings: true
+    json_mode: false
+    vision: false
   source_type: ollama-library
   source_ref: nomic-embed-text
   source_revision: null
