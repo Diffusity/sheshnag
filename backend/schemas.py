@@ -214,6 +214,23 @@ class TokenOut(BaseModel):
     must_change_password: bool = False
 
 
+class InventoryItem(BaseModel):
+    """One on-disk artifact a worker's runtime holds (#116 identity join).
+
+    `sha256` is the artifact FILE's hash (Ollama manifest layer digest,
+    which equals the GGUF file sha256) — never a runtime manifest digest.
+    None when the runtime can't report it (vLLM, unreadable models dir);
+    matching then falls back to the name.
+    """
+    local_name: str
+    sha256: Optional[str] = None
+    # Not persisted yet (runtime_models has no size column); carried for the
+    # reconciliation loop / provider dashboard so the wire shape is stable.
+    size_bytes: Optional[int] = None
+    loaded: bool = False
+    runtime: Optional[str] = None
+
+
 class WorkerHeartbeatRequest(BaseModel):
     """Unified worker heartbeat (spec §8.1: dynamic properties).
 
@@ -230,9 +247,15 @@ class WorkerHeartbeatRequest(BaseModel):
     # None = unknown (unified memory has no machine-wide "in use" counter).
     vram_available_gb: Optional[float] = None
     loaded_models: List[str] = []
-    # Optional name → digest map for the loaded models (additive; older
-    # daemons omit it and fall back to name matching).
+    # Legacy name → /api/tags MANIFEST digest map. Accepted for wire
+    # compatibility, ignored by the backend (not an artifact identity);
+    # file hashes travel in `inventory`.
     loaded_model_digests: dict = {}
+    # Full on-disk inventory, resent whole every beat (additive). Richer
+    # than loaded_models: covers unloaded artifacts and carries file
+    # hashes, so availability rows stay identity-true and drift (a manual
+    # `ollama pull`) surfaces on the next beat.
+    inventory: List[InventoryItem] = []
     uptime_seconds: int = 0
 
 
@@ -293,8 +316,13 @@ class RuntimeInfo(BaseModel):
     type: str                   # "ollama", "vllm", etc.
     endpoint: str
     models: List[str] = []
-    # Optional name → digest map (additive; older daemons omit it).
+    # Legacy name → /api/tags MANIFEST digest map. Accepted for wire
+    # compatibility, ignored by the backend: it is not an artifact identity
+    # (see InventoryItem.sha256). Remove once all daemons send `inventory`.
     model_digests: dict = {}
+    # Full on-disk inventory with file hashes (additive; older daemons
+    # omit it and their rows keep a null digest -> name matching).
+    inventory: List[InventoryItem] = []
 
 
 class WorkerRegisterRequest(BaseModel):

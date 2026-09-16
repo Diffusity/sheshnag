@@ -113,20 +113,29 @@ def register_worker(
         ]
 
     def _runtime_rows():
-        return [
-            WorkerRuntime(
+        rows = []
+        for r in req.runtimes:
+            # Availability rows come from the configured models list plus
+            # the on-disk inventory. Only the inventory's FILE hash is stored
+            # as `digest`: the legacy `model_digests` map carries /api/tags
+            # MANIFEST digests, which never equal a catalogue pin — storing
+            # them would make the picker's guard reject every pinned model
+            # on a not-yet-upgraded daemon. Old daemons therefore keep a
+            # null digest and name-match, exactly as before pins existed.
+            inv_by_name = {i.local_name: i for i in r.inventory}
+            names = list(dict.fromkeys(list(r.models) + list(inv_by_name)))
+            rows.append(WorkerRuntime(
                 engine=r.type,
                 base_url=r.endpoint,
                 models=[
                     RuntimeModel(
                         name=m, runtime_model_id=m,
-                        digest=(r.model_digests or {}).get(m),
+                        digest=inv_by_name[m].sha256 if m in inv_by_name else None,
                     )
-                    for m in r.models
+                    for m in names
                 ],
-            )
-            for r in req.runtimes
-        ]
+            ))
+        return rows
 
     if existing:
         existing.api_key_id = _api_key.id
@@ -197,17 +206,17 @@ def worker_heartbeat(
     worker.vram_total_gb = req.vram_total_gb
     worker.vram_available_gb = req.vram_available_gb
 
-    # Map reported loaded models onto runtime_models.loaded flags, and
-    # record the digest of each loaded model (the reproducibility pin).
+    # Map reported loaded models onto runtime_models.loaded flags. The
+    # legacy `loaded_model_digests` map is accepted but ignored: it carries
+    # /api/tags MANIFEST digests, which never equal a catalogue file-hash
+    # pin, so writing them into `digest` would starve every pinned model on
+    # a not-yet-upgraded daemon. File hashes arrive via `inventory` below.
     reported = set(req.loaded_models)
-    digests = req.loaded_model_digests or {}
     known = set()
     for runtime in worker.runtimes:
         for model in runtime.models:
             was_loaded = model.loaded
             model.loaded = model.name in reported
-            if model.name in digests and digests[model.name]:
-                model.digest = digests[model.name]
             if model.loaded != was_loaded:
                 model.updated_at = unix_now()
             known.add(model.name)
@@ -217,11 +226,38 @@ def worker_heartbeat(
     if missing and worker.runtimes:
         for name in missing:
             worker.runtimes[0].models.append(
-                RuntimeModel(
-                    name=name, runtime_model_id=name,
-                    digest=digests.get(name), loaded=True,
-                )
+                RuntimeModel(name=name, runtime_model_id=name, loaded=True)
             )
+
+    # Full on-disk inventory (additive; older daemons send none): refresh
+    # digests with artifact FILE hashes and record on-disk models that were
+    # never registered, so availability tracks the disk, not just VRAM.
+    # Trust classification of these rows (verified/drift/unregistered) is
+    # the reconciliation loop's job, not the heartbeat's.
+    if req.inventory and worker.runtimes:
+        rows_by_name = {
+            m.name: m for rt in worker.runtimes for m in rt.models
+        }
+        for item in req.inventory:
+            row = rows_by_name.get(item.local_name)
+            if row is not None:
+                if item.sha256 and row.digest != item.sha256:
+                    row.digest = item.sha256
+                    row.updated_at = unix_now()
+            else:
+                row = RuntimeModel(
+                    name=item.local_name,
+                    runtime_model_id=item.local_name,
+                    digest=item.sha256,
+                    loaded=item.loaded,
+                )
+                worker.runtimes[0].models.append(row)
+                # Record it so a duplicate local_name later in the SAME
+                # report updates this row instead of appending a second one
+                # — UniqueConstraint(runtime_id, name) would otherwise fire
+                # at commit and roll back the whole heartbeat, liveness
+                # included, every 30s for as long as the client misbehaves.
+                rows_by_name[item.local_name] = row
 
     db.commit()
     return {"status": "ok", "worker_id": worker_id}
