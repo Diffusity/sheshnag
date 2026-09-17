@@ -44,7 +44,15 @@ HF_HOSTS = ("hf.co", "huggingface.co")
 MODEL_MEDIA_SUFFIX = "image.model"
 MANIFEST_ACCEPT = "application/vnd.docker.distribution.manifest.v2+json"
 DEFAULT_TIMEOUT = 20.0
-DEFAULT_NEGATIVE_TTL = 15 * 60  # seconds
+DEFAULT_NEGATIVE_TTL = 15 * 60  # seconds — definitive answers (mismatch, 404)
+# Transient failures (rate limit, 5xx, network) are remembered only briefly:
+# a 429 blip must not quarantine a confirmable hash for 15 minutes.
+DEFAULT_TRANSIENT_TTL = 60.0
+_TRANSIENT_REASON_PREFIXES = ("network-error", "http-429", "http-5", "bad-json")
+
+
+def is_transient(reason: str) -> bool:
+    return str(reason).startswith(_TRANSIENT_REASON_PREFIXES)
 
 SOURCE_OLLAMA = "ollama-library"   # matches the catalogue's `source_type` vocabulary
 SOURCE_HF = "huggingface"
@@ -162,6 +170,14 @@ class HfName:
         return f"https://huggingface.co/{self.repo_id}"
 
 
+def _hf_from_repo_id(repo_id: str) -> Optional[HfName]:
+    """`Org/Repo` (a daemon-supplied hint, not a runtime name) -> HfName."""
+    parts = [p for p in str(repo_id or "").strip().split("/") if p]
+    if len(parts) != 2:
+        return None
+    return HfName(user=parts[0], repo=parts[1], tag=None)
+
+
 def parse_local_name(local_name: str) -> Union[OllamaName, HfName, None]:
     """Classify a runtime model name by where its manifest lives.
 
@@ -243,12 +259,14 @@ class IdentityResolver:
         client: Optional[httpx.Client] = None,
         negative_ttl: float = DEFAULT_NEGATIVE_TTL,
         clock: Callable[[], float] = time.monotonic,
+        transient_ttl: float = DEFAULT_TRANSIENT_TTL,
     ):
         # Only a client this resolver created is closed by close(); an
         # injected one belongs to the caller (mirrors registry_file_digest).
         self._owns_client = client is None
         self._client = client or _default_client()
         self._negative_ttl = negative_ttl
+        self._transient_ttl = transient_ttl
         self._clock = clock
         self._lock = threading.Lock()
         self._confirmed: dict = {}    # (name, sha256) -> Confirmed        (final)
@@ -256,23 +274,54 @@ class IdentityResolver:
 
     # -- public ---------------------------------------------------------------
 
-    def resolve(self, local_name: str, sha256: Optional[str]) -> Resolution:
+    def resolve(
+        self,
+        local_name: str,
+        sha256: Optional[str],
+        *,
+        source_ref: Optional[str] = None,
+        source_revision: Optional[str] = None,
+        files: Optional[list] = None,
+    ) -> Resolution:
+        """Confirm `(local_name, sha256)`.
+
+        The optional hints come from a daemon that already knows where the
+        bytes came from (vLLM's HF hub cache): `source_ref` is the HF repo
+        id — used instead of parsing `local_name`, which for vLLM is a
+        served alias or a bare `Org/Repo` that would otherwise look like an
+        Ollama community name — `source_revision` the commit to check at,
+        and `files` every shard's sha256. With `files`, confirmation
+        requires EVERY shard to be present in the repo at that revision,
+        not just the identity shard.
+        """
         digest = bare_digest(sha256)
         if not digest:
             return Unconfirmed("no-hash")
-        key = (local_name, digest)
+        digests = tuple(sorted({bare_digest(f) for f in (files or []) if bare_digest(f)} | {digest}))
+        # Key on the SOURCE, not the local name: the auto-adopt loop asks
+        # about one hash under several served names (aliases, repo id), and
+        # every one of them resolves the same upstream repo — without this
+        # each name burns its own request budget per negative TTL.
+        key = (source_ref or local_name, digests, source_ref, source_revision)
 
         cached = self._cached(key)
         if cached is not None:
             return cached
 
-        parsed = parse_local_name(local_name)
-        if isinstance(parsed, OllamaName):
-            result = self._resolve_ollama(parsed, digest)
-        elif isinstance(parsed, HfName):
-            result = self._resolve_hf(parsed, digest)
+        if source_ref:
+            parsed = _hf_from_repo_id(source_ref)
+            if parsed is None:
+                result = Unconfirmed("unsupported-registry")
+            else:
+                result = self._resolve_hf(parsed, digest, digests=digests, revision=source_revision)
         else:
-            result = Unconfirmed("unsupported-registry")
+            parsed = parse_local_name(local_name)
+            if isinstance(parsed, OllamaName):
+                result = self._resolve_ollama(parsed, digest)
+            elif isinstance(parsed, HfName):
+                result = self._resolve_hf(parsed, digest, digests=digests)
+            else:
+                result = Unconfirmed("unsupported-registry")
 
         self._remember(key, result)
         return result
@@ -304,26 +353,28 @@ class IdentityResolver:
                 self._confirmed[key] = result
                 self._unconfirmed.pop(key, None)
             else:
-                self._unconfirmed[key] = (result, self._clock() + self._negative_ttl)
+                ttl = self._transient_ttl if is_transient(result.reason) else self._negative_ttl
+                self._unconfirmed[key] = (result, self._clock() + ttl)
 
     # -- sources --------------------------------------------------------------
 
     def _get_json(self, url: str, **kwargs):
-        """(payload, None) or (None, Unconfirmed). HTTP status and transport
+        """(payload, links, None) or (None, None, Unconfirmed), where links
+        is the parsed `Link` header (pagination). HTTP status and transport
         failures are both Unconfirmed — with distinguishable reasons."""
         try:
             r = self._client.get(url, **kwargs)
         except httpx.HTTPError as exc:
-            return None, Unconfirmed(f"network-error: {type(exc).__name__}")
+            return None, None, Unconfirmed(f"network-error: {type(exc).__name__}")
         if r.status_code != 200:
-            return None, Unconfirmed(f"http-{r.status_code}")
+            return None, None, Unconfirmed(f"http-{r.status_code}")
         try:
-            return r.json(), None
+            return r.json(), dict(r.links), None
         except ValueError:
-            return None, Unconfirmed("bad-json")
+            return None, None, Unconfirmed("bad-json")
 
     def _resolve_ollama(self, name: OllamaName, digest: str) -> Resolution:
-        manifest, err = self._get_json(name.manifest_url, headers={"Accept": MANIFEST_ACCEPT})
+        manifest, _links, err = self._get_json(name.manifest_url, headers={"Accept": MANIFEST_ACCEPT})
         if err:
             return err
         if not isinstance(manifest, dict):
@@ -341,27 +392,56 @@ class IdentityResolver:
             homepage_url=name.homepage_url,
         )
 
-    def _resolve_hf(self, name: HfName, digest: str) -> Resolution:
-        info, err = self._get_json(name.api_url)
-        if err:
-            return err
-        revision = (info or {}).get("sha") if isinstance(info, dict) else None
-        tree, err = self._get_json(
-            f"{name.api_url}/tree/{revision or 'main'}", params={"recursive": "true"}
+    def _resolve_hf(
+        self, name: HfName, digest: str, digests: Optional[tuple] = None,
+        revision: Optional[str] = None,
+    ) -> Resolution:
+        """Confirm at `revision` when the caller knows it (the cached commit
+        vLLM serves), else at the repo's current commit. Every hash in
+        `digests` (default: just `digest`) must be an LFS file in the tree.
+        """
+        if not revision:
+            info, _links, err = self._get_json(name.api_url)
+            if err:
+                return err
+            revision = (info or {}).get("sha") if isinstance(info, dict) else None
+        # The tree endpoint is paginated (1000 entries/page): a repo whose
+        # non-weight files fill the early pages digest-mismatches forever
+        # unless we follow the Link header. Stop early once every required
+        # shard has been seen.
+        required = set(digests or (digest,))
+        paths_by_oid = {}
+        url, params = f"{name.api_url}/tree/{revision or 'main'}", {"recursive": "true"}
+        for _page in range(100):    # 100k files: beyond any model repo
+            tree, links, err = self._get_json(url, params=params)
+            if err:
+                return err
+            if not isinstance(tree, list):
+                return Unconfirmed("bad-json")
+            for entry in tree:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("path") == "adapter_config.json":
+                    return Unconfirmed("lora-adapter")
+                lfs = entry.get("lfs")
+                oid = bare_digest(lfs.get("oid")) if lfs else None
+                if oid:
+                    paths_by_oid.setdefault(oid, entry.get("path"))
+            if required.issubset(paths_by_oid):
+                break
+            nxt = (links.get("next") or {}).get("url", "")
+            if not nxt.startswith("http"):
+                break
+            # The next URL carries its own query (the cursor): passing
+            # params here would make httpx rebuild it from scratch.
+            url, params = nxt, None
+        if not required.issubset(paths_by_oid):
+            return Unconfirmed("digest-mismatch")
+        return Confirmed(
+            source_type=SOURCE_HF,
+            source_ref=name.repo_id,
+            source_revision=revision,
+            digest=digest,
+            homepage_url=name.homepage_url,
+            source_file=paths_by_oid.get(digest),
         )
-        if err:
-            return err
-        if not isinstance(tree, list):
-            return Unconfirmed("bad-json")
-        for entry in tree:
-            lfs = entry.get("lfs") if isinstance(entry, dict) else None
-            if lfs and bare_digest(lfs.get("oid")) == digest:
-                return Confirmed(
-                    source_type=SOURCE_HF,
-                    source_ref=name.repo_id,
-                    source_revision=revision,
-                    digest=digest,
-                    homepage_url=name.homepage_url,
-                    source_file=entry.get("path"),
-                )
-        return Unconfirmed("digest-mismatch")

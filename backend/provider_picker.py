@@ -15,6 +15,7 @@ entry when the artifact is byte-identical.
 """
 import logging
 
+from identity_resolver import bare_digest
 from models import ModelCatalog
 
 logger = logging.getLogger(__name__)
@@ -46,15 +47,9 @@ def get_model_vram(db, model_id: str):
     return entry.vram_gb if entry else None
 
 
-def _norm_digest(d):
-    """Canonicalise a digest for comparison. Ollama reports a bare hex digest
-    via /api/tags while curated catalogue entries may carry a `sha256:`
-    prefix — strip it (and lowercase) so the same artifact compares equal
-    regardless of which path wrote it."""
-    if not d:
-        return None
-    d = str(d).strip().lower()
-    return d.split(":", 1)[1] if ":" in d else d
+# One digest normaliser for the whole backend (identity_resolver.bare_digest):
+# Ollama reports bare hex, curated entries may carry a `sha256:` prefix.
+_norm_digest = bare_digest
 
 
 def _hosts(worker_models, runtime_model_ids, catalog_digest) -> bool:
@@ -67,13 +62,18 @@ def _hosts(worker_models, runtime_model_ids, catalog_digest) -> bool:
     guard: same tag + different digest ⇒ not a match). If either digest is
     missing (older daemon, un-pinned catalogue entry, non-Ollama runtime),
     fall back to name equality so mixed-version fleets keep scheduling.
+    A name the entry does not profile still matches when its digest equals
+    the catalogue's — byte-identical artifact, different served alias: the
+    digest IS the identity, the name is just what that box calls it.
     """
     cat = _norm_digest(catalog_digest)
     ids = set(runtime_model_ids)
     for name, digest in worker_models:
-        if name not in ids:
-            continue
         wd = _norm_digest(digest)
+        if name not in ids:
+            if cat and wd and cat == wd:
+                return True
+            continue
         if cat and wd and cat != wd:
             # Same tag, different artifact — reject. Say so once: a silent
             # rejection here starves the model with nothing in the logs,
@@ -98,21 +98,61 @@ def _target_ids(entry) -> list:
     return [rmid for _runtime, rmid in entry.serving_targets()]
 
 
+def _prefer_bare(names) -> str:
+    """First of `names`, or its first bare (no '/') name.
+
+    A vLLM box restarted under --served-model-name advertises the alias AND
+    the repo id (daemon/executors/vllm.py reports both rows), and vLLM
+    answers only to the alias — paths are never valid body.model values, the
+    same rule `_pick_served_alias` applies at adoption (catalog_service.py).
+    The repo row predates the alias row, so DB row order alone would keep
+    dispatching the repo id (404) after a `--served-model-name` upgrade.
+    A box served without an alias advertises the single id==root name, and
+    Ollama names carry no '/', so the preference changes nothing for them.
+    """
+    for name in names:
+        if name and "/" not in name:
+            return name
+    return names[0]
+
+
 def resolve_runtime_model_id(entry, worker_models) -> str:
     """The runtime_model_id to hand THIS worker for `entry` at dispatch.
 
     A multi-profile entry answers to several ids (`qwen3:4b` to Ollama, an
-    HF repo path to vLLM); the picker matched the worker on ANY of them, so
-    dispatch must send the one this worker actually hosts — not the legacy
-    column. Falls back to the legacy column when nothing matches (entry
-    with no profiles yet, or the pre-heartbeat worker whose model list is
-    empty: the daemon resolves its own runtime's id there).
+    HF repo path to vLLM, an extra alias per box); the picker matched the
+    worker on ANY of them, so dispatch must send the one this worker
+    actually hosts — not the legacy column. Three ways, in order:
+
+    1. a profiled name the worker advertises (digest-checked);
+    2. a name the worker advertises with the entry's exact digest — the
+       same artifact under a name the entry does not profile yet;
+    3. the legacy column (entry with no profiles yet, or the pre-heartbeat
+       worker whose model list is empty: the daemon resolves its own
+       runtime's id there).
+
+    Within 1 and 2, `_prefer_bare` decides when the worker advertises both a
+    repo id and the alias it is served under: only the alias reaches vLLM.
     """
     if entry is None:
         return None
-    for _runtime, rmid in entry.serving_targets():
-        if _hosts(worker_models, [rmid], entry.digest):
-            return rmid
+    cat = _norm_digest(entry.digest)
+    ids = set(rmid for _runtime, rmid in entry.serving_targets())
+    profiled = []
+    for name, digest in worker_models:
+        if name not in ids:
+            continue
+        wd = _norm_digest(digest)
+        if cat and wd and cat != wd:
+            continue  # same name, different artifact
+        profiled.append(name)
+    if profiled:
+        return _prefer_bare(profiled)
+    if cat:
+        exact = [name for name, digest in worker_models
+                 if _norm_digest(digest) == cat]
+        if exact:
+            return _prefer_bare(exact)
     return entry.runtime_model_id
 
 
