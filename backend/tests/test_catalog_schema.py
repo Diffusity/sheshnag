@@ -5,6 +5,8 @@ All rows created here use the `zztest-` prefix and are deleted afterwards:
 the test database is session-scoped with no per-test truncation, and
 test_models.py's seed fixture skips seeding when the catalogue is non-empty.
 """
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy.orm import sessionmaker
 
@@ -256,11 +258,11 @@ def test_hosts_matches_any_serving_target(db, monkeypatch, tmp_path):
     entry = db.query(ModelCatalog).filter(ModelCatalog.id == "zztest-dual-q4km").one()
 
     # A worker advertising EITHER runtime's id can serve the entry.
-    assert can_serve(entry, [("dual:4b", None)], 8.0)
-    assert can_serve(entry, [("repo/dual-Q4_K_M.gguf", None)], 8.0)
-    assert not can_serve(entry, [("other:7b", None)], 8.0)
+    assert can_serve(entry, _worker_hosting([("dual:4b", None)], 8.0))
+    assert can_serve(entry, _worker_hosting([("repo/dual-Q4_K_M.gguf", None)], 8.0))
+    assert not can_serve(entry, _worker_hosting([("other:7b", None)], 8.0))
     # VRAM gate still applies.
-    assert not can_serve(entry, [("dual:4b", None)], 2.0)
+    assert not can_serve(entry, _worker_hosting([("dual:4b", None)], 2.0))
 
     # Dispatch hands each worker the id IT hosts — not the legacy column.
     from provider_picker import resolve_runtime_model_id
@@ -270,3 +272,21 @@ def test_hosts_matches_any_serving_target(db, monkeypatch, tmp_path):
     ) == "repo/dual-Q4_K_M.gguf"
     # No match (pre-heartbeat worker, empty model list) -> legacy fallback.
     assert resolve_runtime_model_id(entry, []) == "dual:4b"
+
+
+def _worker_hosting(models, vram_gb, engine="ollama"):
+    """A worker hosting `(name, digest)` pairs on one runtime with one card.
+
+    `can_serve` takes the worker now, not a flattened model list, because the
+    fit rule depends on which runtime hosts the artifact. These cases are about
+    name/digest matching, so one ready runtime and one card is enough.
+    """
+    return SimpleNamespace(
+        gpus=[SimpleNamespace(vram_gb=vram_gb)],
+        runtimes=[SimpleNamespace(
+            engine=engine, schedulable=True,
+            models=[SimpleNamespace(name=n, digest=d, schedulable=True)
+                    for n, d in models],
+        )],
+        vram_total_gb=vram_gb, ram_total_gb=None, ram_available_gb=None,
+    )

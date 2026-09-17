@@ -4,6 +4,8 @@ every shard present, and auto-adopt building a vLLM entry from them."""
 import json
 
 import httpx
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy.orm import sessionmaker
 
@@ -238,12 +240,12 @@ def test_picker_digest_join_for_unprofiled_alias(auth_client, db):
     db.add(ServingProfile(catalog_id=e.id, runtime="vllm", runtime_model_id="alpha"))
     db.commit()
     other = "ee" * 32
-    assert can_serve(e, [("beta", MSHARD)], 16)
+    assert can_serve(e, _worker_hosting([("beta", MSHARD)], 16))
     assert resolve_runtime_model_id(e, [("beta", MSHARD)]) == "beta"
-    assert not can_serve(e, [("beta", other)], 16)
+    assert not can_serve(e, _worker_hosting([("beta", other)], 16))
     assert resolve_runtime_model_id(e, [("beta", other), ("alpha", MSHARD)]) == "alpha"
-    assert not can_serve(e, [("alpha", other)], 16)     # same tag, different digest
-    assert can_serve(e, [("alpha", None)], 16)          # old daemon: name fallback
+    assert not can_serve(e, _worker_hosting([("alpha", other)], 16))     # same tag, different digest
+    assert can_serve(e, _worker_hosting([("alpha", None)], 16))          # old daemon: name fallback
 
 
 def test_dispatch_sends_served_alias_not_repo_id(db):
@@ -317,3 +319,21 @@ def test_heartbeat_extends_profile_with_new_alias(auth_client, db):
         headers={"Authorization": f"Bearer {key_o}"})
     assert r_o.status_code == 200, r_o.text
     assert db.query(ServingProfile).filter_by(catalog_id=e.id, runtime="ollama").first() is None
+
+
+def _worker_hosting(models, vram_gb, engine="vllm"):
+    """A worker hosting `(name, digest)` pairs on one runtime with one card.
+
+    `can_serve` takes the worker now, not a flattened model list, because the
+    fit rule depends on which runtime hosts the artifact. These cases are about
+    name/digest matching, so one ready runtime and one card is enough.
+    """
+    return SimpleNamespace(
+        gpus=[SimpleNamespace(vram_gb=vram_gb)],
+        runtimes=[SimpleNamespace(
+            engine=engine, schedulable=True,
+            models=[SimpleNamespace(name=n, digest=d, schedulable=True)
+                    for n, d in models],
+        )],
+        vram_total_gb=vram_gb, ram_total_gb=None, ram_available_gb=None,
+    )
