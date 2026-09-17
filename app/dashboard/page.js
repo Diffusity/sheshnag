@@ -1862,7 +1862,13 @@ export default function DashboardPage() {
                       <div>No GPU detected</div>
                     )}
                     {worker.runtimes && worker.runtimes.length > 0 && (
-                      <div className="engine-tag">Engine: {worker.runtimes[0].type || worker.runtimes[0].engine}</div>
+                      /* One tag per runtime — a mixed node drives several
+                         (e.g. vLLM + Ollama), and showing only the first
+                         hid the rest. */
+                      <div className="engine-tag">
+                        Engine{worker.runtimes.length > 1 ? 's' : ''}:{' '}
+                        {worker.runtimes.map((rt) => rt.type || rt.engine).join(', ')}
+                      </div>
                     )}
                   </div>
                   <div className="worker-models">
