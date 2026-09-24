@@ -312,7 +312,11 @@ PY
   echo "[5/6] Creating Python virtual environment..."
   python3 -m venv "$DAEMON_DIR/venv"
   "$DAEMON_DIR/venv/bin/pip" install -q --upgrade pip
-  "$DAEMON_DIR/venv/bin/pip" install -q -r "$DAEMON_DIR/src/daemon/requirements.txt"
+  # Install the daemon as a package: dependencies and code move together, so a
+  # release that adds one cannot leave the service restarting on an ImportError.
+  # pip rebuilds a path requirement on every run, so this picks up a new
+  # checkout even though the version never moves.
+  "$DAEMON_DIR/venv/bin/pip" install -q "$DAEMON_DIR/src/daemon"
 
   # 5. systemd user services (no root; survives logout via linger)
   echo "[6/6] Setting up user services..."
@@ -367,7 +371,7 @@ PY
       echo "==========================================="
   else
       echo "No systemd user session available — start the daemon manually:"
-      echo "  cd $DAEMON_DIR/src/daemon && nohup $DAEMON_DIR/venv/bin/python -m daemon.main --config $DAEMON_DIR/config.yaml >> $DAEMON_DIR/daemon.log 2>&1 &"
+      echo "  nohup $DAEMON_DIR/venv/bin/gpu-daemon --config $DAEMON_DIR/config.yaml >> $DAEMON_DIR/daemon.log 2>&1 &"
   fi
 }
 

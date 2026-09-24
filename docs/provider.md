@@ -119,7 +119,8 @@ Worth knowing, because it is your machine:
    `PATH` — a user-local copy, not a system package.
 4. **Clones the daemon code** into `~/.gpu-daemon/src`.
 5. **Creates a Python virtual environment** at `~/.gpu-daemon/venv` and installs
-   the daemon's dependencies into it. Nothing touches your system Python.
+   the daemon into it as a package, dependencies and all. Nothing touches your
+   system Python. The service runs `~/.gpu-daemon/venv/bin/gpu-daemon`.
 6. **Registers user services**, starts them, and enables *linger* so they
    survive logout. Always `gpu-daemon`; plus `ollama` **only** when step 3
    installed a user-local copy. If your machine already had Ollama, the
@@ -241,7 +242,22 @@ requeued to another worker; nothing is lost.
 
 ```bash
 git -C ~/.gpu-daemon/src pull --ff-only
+~/.gpu-daemon/venv/bin/pip install -q ~/.gpu-daemon/src/daemon
 systemctl --user restart gpu-daemon
+```
+
+The pip line is what makes this safe. Pulling code alone leaves the virtual
+environment untouched, so a release that adds a dependency leaves the service
+restarting every ten seconds on an `ImportError`. Installing the package moves
+code and dependencies together, and pip rebuilds a path requirement on every
+run, so it applies even though the version never changes.
+
+Re-running the installer does all of this and refreshes the service definition
+too, which a pull cannot. It asks for your platform URL and worker key again,
+so pass them in if you no longer have the key to hand:
+
+```bash
+BACKEND_URL=https://your-host API_KEY=gk-... bash install.sh
 ```
 
 ---
