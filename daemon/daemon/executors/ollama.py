@@ -404,7 +404,15 @@ class OllamaExecutor(BaseExecutor):
             logger.warning(f"Ollama health check or version retrieval failed: {e}")
             return False
             
-    async def pull_model(self, model_name: str, progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None) -> bool:
+    async def pull_model(
+        self,
+        model_name: str,
+        progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
+        *,
+        digest: Optional[str] = None,
+        size_gb: Optional[float] = None,
+        source_ref: Optional[str] = None,
+    ) -> bool:
         """
         Pull/download a model via Ollama's POST /api/pull.
         Streams progress and reports via callback.

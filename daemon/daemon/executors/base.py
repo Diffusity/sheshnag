@@ -19,7 +19,7 @@ Week 2+ extensions:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from daemon.models import CompletionResult, PromptRequest
 
@@ -152,6 +152,35 @@ class BaseExecutor(ABC):
         preference worthless. Must never raise.
         """
         return []
+
+    async def pull_model(
+        self,
+        model_name: str,
+        progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
+        *,
+        digest: Optional[str] = None,
+        size_gb: Optional[float] = None,
+        source_ref: Optional[str] = None,
+    ) -> bool:
+        """Fetch a model into this runtime's store.
+
+        Optional capability — subclasses that can fetch models override
+        this; the default returns False (not supported). The caller must
+        not distinguish "not supported" from "failed" via the return
+        value alone; implementations log why inside.
+
+        Args:
+            model_name:        Runtime model id to fetch.
+            progress_callback: Async callable receiving
+                               ``{"status": ..., "completed": N, "total": N}``.
+            digest:            Expected sha256 of the artifact (from catalogue).
+            size_gb:           On-disk size in GB (for free-space checks).
+            source_ref:        Pull reference (Ollama library path, etc.).
+
+        Returns:
+            True if the model is now available, False otherwise.
+        """
+        return False
 
     async def inventory(self) -> List[dict]:
         """

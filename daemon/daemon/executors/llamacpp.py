@@ -26,8 +26,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 
@@ -452,6 +453,112 @@ class LlamaCppExecutor(BaseExecutor):
                 "details": details,
             })
         return self.tag_inventory(items)
+
+    # ── Model fetching ───────────────────────────────────────────
+
+    async def pull_model(
+        self,
+        model_name: str,
+        progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
+        *,
+        digest: Optional[str] = None,
+        size_gb: Optional[float] = None,
+        source_ref: Optional[str] = None,
+    ) -> bool:
+        """Fetch a model from the Ollama registry into models_dir.
+
+        Opt-in: returns False when models_dir is not configured or the
+        fetch cannot proceed (no source_ref, insufficient disk space,
+        digest mismatch). Never raises — failures are logged and the
+        caller gets False.
+
+        On success the file lands as ``<models_dir>/<model_name>.gguf``
+        with a ``<model_name>.gguf.json`` sidecar (sha256, size,
+        source_ref), matching what ``stage-models.sh`` writes so
+        hand-staged and fetched models are indistinguishable on disk.
+        """
+        if self._models_dir is None:
+            logger.info(
+                f"pull_model('{model_name}'): models_dir not configured "
+                f"— fetch is opt-in, returning False"
+            )
+            return False
+
+        if source_ref is None:
+            logger.info(
+                f"pull_model('{model_name}'): no source_ref — cannot "
+                f"fetch without knowing what to pull"
+            )
+            return False
+
+        # ── Free-space check ──────────────────────────────────────
+        if size_gb is not None:
+            usage = shutil.disk_usage(self._models_dir)
+            free_gb = usage.free / (1024 ** 3)
+            needed_gb = size_gb * 1.1  # 10 % headroom
+            if free_gb < needed_gb:
+                logger.warning(
+                    f"pull_model('{model_name}'): insufficient disk space "
+                    f"— need {needed_gb:.1f} GB, have {free_gb:.1f} GB"
+                )
+                return False
+
+        # ── Download ─────────────────────────────────────────────
+        from daemon.ollama_registry import pull
+
+        try:
+            temp_path, computed_sha = await pull(
+                source_ref,
+                self._models_dir,
+                progress_callback=progress_callback,
+            )
+        except Exception as exc:
+            logger.error(
+                f"pull_model('{model_name}'): download failed: {exc}"
+            )
+            return False
+
+        # ── Digest verification ───────────────────────────────────
+        if digest is not None:
+            # Catalogue digests may carry a "sha256:" prefix.
+            expected = digest.removeprefix("sha256:")
+            if computed_sha != expected:
+                logger.error(
+                    f"pull_model('{model_name}'): digest MISMATCH — "
+                    f"expected sha256:{expected[:12]}..., "
+                    f"got sha256:{computed_sha[:12]}... "
+                    f"— deleting temp file, refusing to serve "
+                    f"unverified weights"
+                )
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return False
+
+        # ── Place the file ────────────────────────────────────────
+        final_path = self._models_dir / f"{model_name}.gguf"
+        try:
+            temp_path.rename(final_path)
+        except OSError:
+            # Cross-device rename; fall back to copy + delete.
+            import shutil as _shutil
+            _shutil.move(str(temp_path), str(final_path))
+
+        # Write the sidecar — same shape as stage-models.sh.
+        sidecar_path = self._models_dir / f"{model_name}.gguf.json"
+        sidecar = {
+            "sha256": computed_sha,
+            "size": final_path.stat().st_size,
+            "source_ref": source_ref,
+        }
+        sidecar_path.write_text(json.dumps(sidecar))
+
+        logger.info(
+            f"pull_model('{model_name}'): placed {final_path.name} "
+            f"({sidecar['size'] / 1e9:.1f} GB) + sidecar"
+        )
+        return True
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
