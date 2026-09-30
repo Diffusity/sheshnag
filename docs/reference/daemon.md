@@ -26,9 +26,14 @@ or **vLLM** or **llama.cpp**), uploads results, and reports heartbeats and progr
 │   ┌──────────────┘   └────────┐      │                       │
 │   ▼                          ▼      │                       │
 │ ┌───────────────┐   ┌──────────────┐ │                       │
-│ │ HeartbeatMgr  │   │ BaseExecutor │ │                       │
-│ │ (30s, stats)  │   │    (ABC)     │ │                       │
+│ │ HeartbeatMgr  │   │ ModelManagers│ │                       │
+│ │ (30s, stats)  │   │ (downloads)  │ │                       │
 │ └───────────────┘   └──────┬───────┘ │                       │
+│                            ▼         │                       │
+│                     ┌──────────────┐ │                       │
+│                     │ BaseExecutor │ │                       │
+│                     │    (ABC)     │ │                       │
+│                     └──────┬───────┘ │                       │
 │                    ┌───────┴────────┐│                       │
 │                    ▼                ▼│                       │
 │           ┌────────────────┐ ┌──────────────┐                │
@@ -68,7 +73,7 @@ daemon/
 │   ├── heartbeat.py         # HeartbeatManager (activity, capabilities, runtime liveness)
 │   ├── hardware.py          # GPU/CPU/RAM inspection (nvidia-smi etc.)
 │   ├── registration.py      # Registration + credential persistence
-│   ├── model_manager.py     # Ollama model pulls (on-the-fly downloads)
+│   ├── model_manager.py     # Runtime model pulls (on-the-fly downloads)
 │   ├── executor_factory.py  # runtime config → executor instance
 │   ├── executors/
 │   │   ├── base.py          # BaseExecutor ABC
@@ -94,7 +99,7 @@ daemon/
 | `/workers/poll` | POST | Poll for available batches |
 | `/v1/files/{id}/content` | GET | Download input JSONL (path from poll response) |
 | `/workers/progress` | POST | Live prompt counts, time-throttled (default 5s) plus a guaranteed final report |
-| `/workers/model-progress` | POST | Model download progress (Ollama pulls) |
+| `/workers/model-progress` | POST | Model download progress |
 | `/workers/upload-results` | POST | Upload output JSONL + `worker_id` + real completed/failed counts |
 | `/workers/report-failure` | POST | Report failure — backend requeues (max 3 attempts) |
 

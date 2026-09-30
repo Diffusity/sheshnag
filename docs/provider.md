@@ -22,10 +22,8 @@ uploads the results, and goes back to waiting.
 **What it does to your machine**
 
 - Uses your GPU when a job is running, and nothing when idle.
-- Downloads model weights on demand — these can be large, and they land under
-  your home directory.
-- Runs one or two background services under your own user account — the daemon,
-  and Ollama as well if you did not already have it.
+- Downloads model weights on demand — these can be large (often several GB), and they land under your home directory. The daemon fetches them as needed regardless of which runtime executes the prompt.
+- Runs one or two background services under your own user account — the daemon, and Ollama as well if you did not already have it.
 
 **What it does not do**
 
