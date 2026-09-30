@@ -424,6 +424,9 @@ def poll_job(
             "input_file_id": batch.input_file_id,
             "input_path":    f"/v1/files/{batch.input_file_id}/content",
             "model":         runtime_model_id,
+            "model_digest":    entry.digest if entry else None,
+            "model_size_gb":   entry.size_gb if entry else None,
+            "model_source_ref": entry.source_ref if entry else None,
         }
     }
 

@@ -137,6 +137,9 @@ class Job(BaseModel):
         input_path:    Backend-provided URL path to download the input file
                        (e.g., "/v1/files/{file_id}/content").
         model:         Model name to use for inference.
+        model_digest:  Expected sha256 of the model artifact (from catalogue).
+        model_size_gb: On-disk size in GB (from catalogue, for space checks).
+        model_source_ref: Ollama library path or similar pull reference.
         input_file:    (Legacy) Name of the input JSONL file.
         status:        Current job status (trusted from backend).
         max_tokens:    Default max tokens for prompts in this job.
@@ -147,6 +150,9 @@ class Job(BaseModel):
     input_file_id: Optional[str] = None
     input_path: Optional[str] = None
     model: str = ""
+    model_digest: Optional[str] = None
+    model_size_gb: Optional[float] = None
+    model_source_ref: Optional[str] = None
     input_file: Optional[str] = None
     status: JobStatus = JobStatus.QUEUED
     max_tokens: int = 512
