@@ -19,7 +19,7 @@ Week 2+ extensions:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from daemon.models import CompletionResult, PromptRequest
 
@@ -35,7 +35,14 @@ class BaseExecutor(ABC):
     Subclasses MAY override:
         - batch_execute(): optimize for batch processing
         - close(): release resources on shutdown
+        - list_models(): the names that route to this runtime
+        - pull_model() + supports_pull: fetch models the runtime lacks
     """
+
+    # Whether pull_model() can obtain a model this runtime does not hold.
+    # Read before a fetch is attempted, so a runtime without one is never
+    # asked and never reports a download failure it could not have avoided.
+    supports_pull: bool = False
 
     @abstractmethod
     async def execute(self, prompt: PromptRequest) -> CompletionResult:
@@ -139,6 +146,16 @@ class BaseExecutor(ABC):
             results.append(result)
         return results
 
+    async def list_models(self) -> List[str]:
+        """Every model name this runtime answers to, loaded or not.
+
+        Drives the worker's model→runtime routing map, and is what a fetch
+        is checked against before and after it runs. An empty list means no
+        name routes here, so a job naming one of this runtime's models fails
+        as unhosted. Must never raise.
+        """
+        return []
+
     async def list_running_models(self) -> List[str]:
         """Model names resident in the runtime right now, not merely on disk.
 
@@ -152,6 +169,28 @@ class BaseExecutor(ABC):
         preference worthless. Must never raise.
         """
         return []
+
+    async def pull_model(
+        self,
+        model_name: str,
+        progress_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
+    ) -> bool:
+        """Fetch a model into this runtime's store.
+
+        Optional capability — subclasses that can fetch models override
+        this; the default returns False. The return value alone does not
+        separate "cannot fetch" from "tried and failed"; implementations
+        log why inside.
+
+        Args:
+            model_name:        Runtime model id to fetch.
+            progress_callback: Async callable receiving
+                               ``{"status": ..., "completed": N, "total": N}``.
+
+        Returns:
+            True if the model is now available, False otherwise.
+        """
+        return False
 
     async def inventory(self) -> List[dict]:
         """
